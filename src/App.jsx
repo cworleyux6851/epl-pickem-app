@@ -105,8 +105,6 @@ export default function App() {
       try {
         console.log('=== LOADING PICKS ===');
         console.log('User:', user.name);
-        console.log('User ID type:', typeof user.id);
-        console.log('User ID value:', user.id);
         console.log('Current matchday:', currentWeek);
         
         const { data: picks, error: picksError } = await supabase
@@ -265,8 +263,7 @@ export default function App() {
       if (existingTeams && existingTeams.length > 0) {
         console.log('✓ Team exists, logging in');
         console.log('Team data:', existingTeams[0]);
-        console.log('Team ID being set:', existingTeams[0].id);
-        setUser({ id: existingTeams[0].id, name: teamName });
+        setUser({ name: teamName });
         setLoading(false);
         return;
       }
@@ -288,14 +285,13 @@ export default function App() {
         throw new Error('Team creation returned no data');
       }
 
-      const createdTeamId = newTeam[0].id;
-      console.log('✓ Team created with ID:', createdTeamId);
+      console.log('✓ Team created');
 
       // Step 4: Create standings entry
       console.log('Step 4: Creating standings entry...');
       const { error: standingsError } = await supabase
         .from('team_standings')
-        .insert([{ team_id: createdTeamId, team_name: teamName, points: 0 }]);
+        .insert([{ team_name: teamName, points: 0 }]);
 
       if (standingsError) {
         console.error('Standings creation error:', standingsError);
@@ -305,7 +301,7 @@ export default function App() {
       console.log('✓ Standings created');
 
       console.log('=== LOGIN SUCCESS ===');
-      setUser({ id: createdTeamId, name: teamName });
+      setUser({ name: teamName });
     } catch (e) {
       console.error('=== LOGIN FAILED ===');
       console.error('Error:', e.message);
@@ -347,9 +343,9 @@ export default function App() {
       // Create standings
       await supabase
         .from('team_standings')
-        .insert([{ team_id: newTeam.id, points: 0 }]);
+        .insert([{ team_name: teamName, points: 0 }]);
 
-      setUser({ id: newTeam.id, name: teamName });
+      setUser({ name: teamName });
       setIsCreating(false);
     } catch (e) {
       console.error('Create league error:', e);
