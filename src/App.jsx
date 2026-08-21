@@ -30,6 +30,20 @@ const formatGameTime = (isoString) => {
   }) + ' CST';
 };
 
+const formatLockDateTime = (isoString) => {
+  const cstDate = convertToCST(isoString);
+  const lockTime = new Date(cstDate.getTime() - 60 * 60 * 1000); // 1 hour before
+  return lockTime.toLocaleString('en-US', {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+    timeZone: 'America/Chicago'
+  }) + ' CST';
+};
+
 export default function App() {
   const [user, setUser] = useState(null);
   const [teamName, setTeamName] = useState('');
@@ -44,7 +58,7 @@ export default function App() {
   const [leaderboard, setLeaderboard] = useState([]);
   const [currentWeek, setCurrentWeek] = useState(null);
   const [selectedWeek, setSelectedWeek] = useState(null);
-  const [minutesUntilLock, setMinutesUntilLock] = useState(null);
+  const [lockDateTime, setLockDateTime] = useState(null);
   const [saveStatus, setSaveStatus] = useState('');
   const [fixturesLoading, setFixturesLoading] = useState(true);
 
@@ -80,10 +94,9 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [currentPicks, user, currentWeek, selectedWeek]);
 
+  // Load fixtures with caching (24 hour cache)
   useEffect(() => {
-    loadFixtures();
-    const interval = setInterval(loadFixtures, 120000);
-    return () => clearInterval(interval);
+    loadFixturesWithCache();
   }, []);
 
   useEffect(() => {
@@ -100,21 +113,11 @@ export default function App() {
     
     const firstGame = weekFixtures.find(f => f.status !== 'FINISHED');
     if (!firstGame) {
-      setMinutesUntilLock(0);
+      setLockDateTime('All games finished');
       return;
     }
 
-    const lockTime = new Date(new Date(firstGame.utc_date).getTime() - 60 * 60 * 1000);
-    const interval = setInterval(() => {
-      const now = new Date();
-      const minutes = Math.floor((lockTime - now) / 1000 / 60);
-      setMinutesUntilLock(minutes > 0 ? minutes : 0);
-    }, 30000);
-    
-    const minutes = Math.floor((lockTime - new Date()) / 1000 / 60);
-    setMinutesUntilLock(minutes > 0 ? minutes : 0);
-    
-    return () => clearInterval(interval);
+    setLockDateTime(formatLockDateTime(firstGame.utc_date));
   }, [allFixtures, selectedWeek, currentWeek]);
 
   // Load previous week's picks for duplicate checking
@@ -144,19 +147,47 @@ export default function App() {
     loadPrevWeekPicks();
   }, [user, currentWeek]);
 
-  const getFixturesForWeek = (week) => {
-    if (!week) return [];
-    return allFixtures
-      .filter(f => f.matchday === week && isWeekend(f.utc_date))
-      .sort((a, b) => new Date(a.utc_date) - new Date(b.utc_date));
-  };
-
-  const loadFixtures = async () => {
+  const loadFixturesWithCache = async () => {
     try {
       setFixturesLoading(true);
+      
+      // Check if we have cached fixtures and they're less than 24 hours old
+      const cachedData = localStorage.getItem('epl_fixtures_cache');
+      const cacheTimestamp = localStorage.getItem('epl_fixtures_cache_time');
+      const now = Date.now();
+      const cacheAge = cacheTimestamp ? now - parseInt(cacheTimestamp) : null;
+      const ONE_DAY = 24 * 60 * 60 * 1000; // 24 hours in ms
+      
+      if (cachedData && cacheAge && cacheAge < ONE_DAY) {
+        // Use cached data
+        const data = JSON.parse(cachedData);
+        setAllFixtures(data.fixtures);
+        setCurrentWeek(data.currentMatchday);
+        setSelectedWeek(data.currentMatchday);
+        
+        if (user) {
+          const { data: picks } = await supabase.from('picks').select('*').eq('team_id', user.id).eq('matchday', data.currentMatchday);
+          if (picks) {
+            const picksMap = {};
+            picks.forEach(p => {
+              picksMap[p.fixture_id] = p.picked_team;
+            });
+            setCurrentPicks(picksMap);
+          }
+        }
+        setFixturesLoading(false);
+        return;
+      }
+      
+      // Fetch fresh data from API
       const res = await fetch('/api/fetch-epl-data');
       const data = await res.json();
+      
       if (data.fixtures && data.fixtures.length > 0) {
+        // Cache the data
+        localStorage.setItem('epl_fixtures_cache', JSON.stringify(data));
+        localStorage.setItem('epl_fixtures_cache_time', now.toString());
+        
         setAllFixtures(data.fixtures);
         setCurrentWeek(data.currentMatchday);
         setSelectedWeek(data.currentMatchday);
@@ -179,10 +210,33 @@ export default function App() {
     }
   };
 
+  const getFixturesForWeek = (week) => {
+    if (!week) return [];
+    return allFixtures
+      .filter(f => f.matchday === week && isWeekend(f.utc_date))
+      .sort((a, b) => new Date(a.utc_date) - new Date(b.utc_date));
+  };
+
   const loadLeaderboard = async () => {
     try {
-      const { data } = await supabase.from('team_standings').select('*').order('points', { ascending: false });
-      setLeaderboard(data || []);
+      // Get standings with points
+      const { data: standings } = await supabase
+        .from('team_standings')
+        .select('*')
+        .order('points', { ascending: false });
+      
+      // Get games picked count for each team
+      if (standings) {
+        const enriched = await Promise.all(standings.map(async (team) => {
+          const { count } = await supabase
+            .from('picks')
+            .select('*', { count: 'exact', head: true })
+            .eq('team_id', team.team_id);
+          return { ...team, games_picked: count || 0 };
+        }));
+        
+        setLeaderboard(enriched);
+      }
     } catch (e) {
       console.error('Leaderboard error:', e);
     }
@@ -218,7 +272,7 @@ export default function App() {
       }
       setUser({ name: teamName, id: newTeam.id });
       setError('');
-      loadFixtures();
+      loadFixturesWithCache();
     } catch (err) {
       setError('Unexpected error: ' + err.message);
     }
@@ -247,7 +301,7 @@ export default function App() {
         team = newTeam;
       }
       setUser({ name: teamName, id: team.id });
-      loadFixtures();
+      loadFixturesWithCache();
     } catch (err) {
       setError(err.message);
     }
@@ -259,11 +313,7 @@ export default function App() {
       setError('You can only pick for the current week');
       return;
     }
-    if (minutesUntilLock <= 0) {
-      setError('Picks are locked!');
-      return;
-    }
-
+    
     // Check if team was picked last week
     if (prevWeekPicks[team]) {
       setError(`Can't pick ${team} - already picked them last week!`);
@@ -397,9 +447,9 @@ export default function App() {
         </div>
       </div>
 
-      <div style={{ maxWidth: '1400px', margin: '0 auto', padding: '20px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(350px, 1fr))', gap: '20px', '@media (max-width: 768px)': { gridTemplateColumns: '1fr' } }}>
+      <div style={{ maxWidth: '1400px', margin: '0 auto', padding: '20px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(350px, 1fr))', gap: '20px' }}>
         {/* Main Content */}
-        <div style={{ gridColumn: 'span 2', '@media (max-width: 768px)': { gridColumn: 'span 1' } }}>
+        <div style={{ gridColumn: 'span 2' }}>
           {/* Week Navigation */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '20px', flexWrap: 'wrap' }}>
             <button 
@@ -422,14 +472,10 @@ export default function App() {
           </div>
 
           {/* Status Bar */}
-          {isCurrentWeek && (
-            <div style={{ marginBottom: '16px', padding: '12px', background: minutesUntilLock > 60 ? '#e7f3ff' : minutesUntilLock > 0 ? '#fff3cd' : '#f8d7da', borderLeft: `4px solid ${minutesUntilLock > 60 ? '#2a5298' : minutesUntilLock > 0 ? '#ff9800' : '#dc3545'}`, borderRadius: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px', fontSize: 'clamp(12px, 3vw, 14px)' }}>
+          {isCurrentWeek && lockDateTime && (
+            <div style={{ marginBottom: '16px', padding: '12px', background: '#e7f3ff', borderLeft: '4px solid #2a5298', borderRadius: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px', fontSize: 'clamp(12px, 3vw, 14px)' }}>
               <div>
-                {minutesUntilLock > 0 ? (
-                  <strong>⏱ Lock in {minutesUntilLock}m</strong>
-                ) : (
-                  <strong>🔒 LOCKED</strong>
-                )}
+                <strong>🔒 Picks lock: {lockDateTime}</strong>
               </div>
               {saveStatus && <div style={{ color: '#28a745', fontWeight: 'bold' }}>{saveStatus}</div>}
             </div>
@@ -487,7 +533,7 @@ export default function App() {
                     }}
                   >
                     <div style={{ padding: '12px', borderBottom: `1px solid ${borderColor}` }}>
-                      <div style={{ fontSize: 'clamp(11px, 2vw, 12px)', color: '#999', marginBottom: '6px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <div style={{ fontSize: 'clamp(11px, 2vw, 12px)', color: '#999', marginBottom: '6px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
                         <span>📅 {formatGameTime(f.utc_date)}</span>
                         <span style={{ background: isFinished ? '#999' : '#2a5298', color: 'white', padding: '2px 8px', borderRadius: '4px', fontSize: 'clamp(10px, 2vw, 11px)' }}>
                           {isFinished ? '✓ FINISHED' : '⚪ UPCOMING'}
@@ -497,19 +543,19 @@ export default function App() {
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr', gap: '8px', alignItems: 'center' }}>
                         {/* Home Team */}
                         <div 
-                          onClick={() => isCurrentWeek && minutesUntilLock > 0 && togglePick(f.id, f.home_team_name)}
+                          onClick={() => isCurrentWeek && togglePick(f.id, f.home_team_name)}
                           style={{
                             padding: '10px',
                             borderRadius: '8px',
                             background: currentPicks[f.id] === f.home_team_name ? '#d4edda' : isFinished ? '#f0f0f0' : '#f8f9fa',
                             border: currentPicks[f.id] === f.home_team_name ? '2px solid #28a745' : `2px solid ${isFinished ? '#ddd' : '#ddd'}`,
-                            cursor: isCurrentWeek && minutesUntilLock > 0 && !isFinished ? 'pointer' : 'default',
+                            cursor: isCurrentWeek && !isFinished ? 'pointer' : 'default',
                             transition: 'all 0.2s',
-                            opacity: !isCurrentWeek || minutesUntilLock <= 0 || isFinished ? 0.6 : 1,
+                            opacity: !isCurrentWeek || isFinished ? 0.6 : 1,
                             textAlign: 'center'
                           }}
                           onMouseEnter={e => {
-                            if (isCurrentWeek && minutesUntilLock > 0 && !isFinished) {
+                            if (isCurrentWeek && !isFinished) {
                               e.currentTarget.style.background = currentPicks[f.id] === f.home_team_name ? '#d4edda' : '#e9ecef';
                             }
                           }}
@@ -527,19 +573,19 @@ export default function App() {
 
                         {/* Away Team */}
                         <div 
-                          onClick={() => isCurrentWeek && minutesUntilLock > 0 && togglePick(f.id, f.away_team_name)}
+                          onClick={() => isCurrentWeek && togglePick(f.id, f.away_team_name)}
                           style={{
                             padding: '10px',
                             borderRadius: '8px',
                             background: currentPicks[f.id] === f.away_team_name ? '#d4edda' : isFinished ? '#f0f0f0' : '#f8f9fa',
                             border: currentPicks[f.id] === f.away_team_name ? '2px solid #28a745' : `2px solid ${isFinished ? '#ddd' : '#ddd'}`,
-                            cursor: isCurrentWeek && minutesUntilLock > 0 && !isFinished ? 'pointer' : 'default',
+                            cursor: isCurrentWeek && !isFinished ? 'pointer' : 'default',
                             transition: 'all 0.2s',
-                            opacity: !isCurrentWeek || minutesUntilLock <= 0 || isFinished ? 0.6 : 1,
+                            opacity: !isCurrentWeek || isFinished ? 0.6 : 1,
                             textAlign: 'center'
                           }}
                           onMouseEnter={e => {
-                            if (isCurrentWeek && minutesUntilLock > 0 && !isFinished) {
+                            if (isCurrentWeek && !isFinished) {
                               e.currentTarget.style.background = currentPicks[f.id] === f.away_team_name ? '#d4edda' : '#e9ecef';
                             }
                           }}
@@ -572,14 +618,22 @@ export default function App() {
                 <div style={{ padding: '16px', color: '#999', textAlign: 'center', fontSize: 'clamp(12px, 3vw, 14px)' }}>No teams</div>
               ) : (
                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr style={{ borderBottom: '2px solid #f0f0f0', background: '#f8f9fa' }}>
+                      <th style={{ padding: 'clamp(8px, 1vw, 10px)', fontSize: 'clamp(11px, 2vw, 12px)', fontWeight: 'bold', color: '#666', textAlign: 'left' }}>Team</th>
+                      <th style={{ padding: 'clamp(8px, 1vw, 10px)', fontSize: 'clamp(11px, 2vw, 12px)', fontWeight: 'bold', color: '#666', textAlign: 'right' }}>Pts</th>
+                      <th style={{ padding: 'clamp(8px, 1vw, 10px)', fontSize: 'clamp(11px, 2vw, 12px)', fontWeight: 'bold', color: '#666', textAlign: 'right' }}>Picks</th>
+                    </tr>
+                  </thead>
                   <tbody>
                     {leaderboard.map((t, i) => (
                       <tr key={t.team_id} style={{ borderBottom: i < leaderboard.length - 1 ? '1px solid #f0f0f0' : 'none', background: t.team_id === user.id ? '#f0f7ff' : '#fff' }}>
                         <td style={{ padding: 'clamp(10px, 2vw, 12px)', fontSize: 'clamp(12px, 3vw, 14px)' }}>
-                          <span style={{ marginRight: '6px' }}>{i + 1}.</span>
+                          <span style={{ marginRight: '6px', fontWeight: 'bold', color: '#999' }}>{i + 1}.</span>
                           <strong style={{ color: t.team_id === user.id ? '#2a5298' : '#1e3c72' }}>{t.team_name}</strong>
                         </td>
                         <td style={{ padding: 'clamp(10px, 2vw, 12px)', textAlign: 'right', fontWeight: 'bold', color: '#2a5298', fontSize: 'clamp(14px, 4vw, 16px)' }}>{t.points || 0}</td>
+                        <td style={{ padding: 'clamp(10px, 2vw, 12px)', textAlign: 'right', fontWeight: 'bold', color: '#666', fontSize: 'clamp(12px, 3vw, 14px)' }}>{t.games_picked || 0}</td>
                       </tr>
                     ))}
                   </tbody>
