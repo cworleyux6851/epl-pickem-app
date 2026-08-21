@@ -138,7 +138,6 @@ export default function App() {
 
   const loadLeaderboard = async () => {
     try {
-      // Fetch standings
       const { data: standings, error: standingsError } = await supabase
         .from('team_standings')
         .select('*')
@@ -154,26 +153,9 @@ export default function App() {
         return;
       }
 
-      // Fetch all teams
-      const { data: teams, error: teamsError } = await supabase
-        .from('teams')
-        .select('id, name');
-
-      if (teamsError) {
-        console.error('Teams error:', teamsError);
-        return;
-      }
-
-      // Create team map
-      const teamMap = {};
-      (teams || []).forEach(t => {
-        teamMap[t.id] = t.name;
-      });
-
-      // Merge standings with team names
       const leaderboardData = standings.map(s => ({
         team_id: s.team_id,
-        name: teamMap[s.team_id] || 'Unknown',
+        name: s.team_name,
         points: s.points || 0
       }));
 
@@ -269,7 +251,7 @@ export default function App() {
       console.log('Step 4: Creating standings entry...');
       const { error: standingsError } = await supabase
         .from('team_standings')
-        .insert([{ team_id: createdTeamId, points: 0 }]);
+        .insert([{ team_id: createdTeamId, team_name: teamName, points: 0 }]);
 
       if (standingsError) {
         console.error('Standings creation error:', standingsError);
