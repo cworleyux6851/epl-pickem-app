@@ -364,22 +364,28 @@ export default function App() {
 
     setCurrentPicks(prev => {
       const updated = { ...prev };
+      const currentPick = updated[fixtureId];
       
-      // If this pick is already selected, remove it (always allowed)
-      if (updated[fixtureId] === teamName) {
+      // If clicking same team, deselect
+      if (currentPick === teamName) {
         delete updated[fixtureId];
         return updated;
       }
       
-      // If trying to add a new pick
-      const pickCount = Object.keys(updated).filter(k => updated[k]).length;
+      // If already have a pick for this game, just switch it (no error)
+      if (currentPick) {
+        updated[fixtureId] = teamName;
+        return updated;
+      }
+      
+      // New pick - check if under 5
+      const pickCount = Object.keys(updated).length;
       if (pickCount >= 5) {
         setError('Maximum 5 picks per week');
         setTimeout(() => setError(''), 3000);
-        return prev; // Don't add the pick
+        return prev;
       }
       
-      // Add the new pick
       updated[fixtureId] = teamName;
       return updated;
     });
