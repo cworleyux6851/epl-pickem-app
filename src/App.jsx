@@ -189,58 +189,100 @@ export default function App() {
     setError('');
 
     try {
-      // Check league password
+      console.log('=== LOGIN START ===');
+      console.log('Team name:', teamName);
+
+      // Step 1: Check league password
+      console.log('Step 1: Checking league password...');
       const { data: league, error: leagueError } = await supabase
         .from('league_config')
         .select('password')
         .single();
 
-      if (leagueError || !league) {
+      if (leagueError) {
+        console.error('League fetch error:', leagueError);
         setError('League not found. Create a league first.');
         setLoading(false);
         return;
       }
 
+      if (!league) {
+        console.error('No league data returned');
+        setError('League not configured.');
+        setLoading(false);
+        return;
+      }
+
+      console.log('League password on file:', league.password);
+
       if (league.password !== leaguePassword) {
+        console.error('Password mismatch. Got:', leaguePassword, 'Expected:', league.password);
         setError('Incorrect league password');
         setLoading(false);
         return;
       }
 
-      // Check if team exists (don't use .single() - it errors if 0 rows)
-      const { data: existingTeams } = await supabase
+      console.log('✓ Password correct');
+
+      // Step 2: Check if team exists
+      console.log('Step 2: Checking if team exists...');
+      const { data: existingTeams, error: teamCheckError } = await supabase
         .from('teams')
         .select('id')
         .eq('name', teamName);
 
-      if (existingTeams && existingTeams.length > 0) {
-        // Team exists, log in
-        setUser({ id: existingTeams[0].id, name: teamName });
-      } else {
-        // Team doesn't exist, auto-create it
-        const { data: newTeam, error: createError } = await supabase
-          .from('teams')
-          .insert([{ name: teamName }])
-          .select()
-          .single();
-
-        if (createError || !newTeam) {
-          throw new Error('Failed to create team: ' + (createError?.message || 'Unknown error'));
-        }
-
-        // Create standings entry
-        const { error: standingsError } = await supabase
-          .from('team_standings')
-          .insert([{ team_id: newTeam.id, points: 0 }]);
-
-        if (standingsError) {
-          throw new Error('Failed to create standings: ' + standingsError.message);
-        }
-
-        setUser({ id: newTeam.id, name: teamName });
+      if (teamCheckError) {
+        console.error('Team check error:', teamCheckError);
+        throw new Error('Failed to check team: ' + teamCheckError.message);
       }
+
+      console.log('Existing teams found:', existingTeams?.length || 0);
+
+      if (existingTeams && existingTeams.length > 0) {
+        console.log('✓ Team exists, logging in');
+        setUser({ id: existingTeams[0].id, name: teamName });
+        setLoading(false);
+        return;
+      }
+
+      // Step 3: Create new team
+      console.log('Step 3: Creating new team...');
+      const { data: newTeam, error: createError } = await supabase
+        .from('teams')
+        .insert([{ name: teamName }])
+        .select();
+
+      if (createError) {
+        console.error('Team creation error:', createError);
+        throw new Error('Failed to create team: ' + createError.message);
+      }
+
+      if (!newTeam || newTeam.length === 0) {
+        console.error('Team insert returned no data');
+        throw new Error('Team creation returned no data');
+      }
+
+      const createdTeamId = newTeam[0].id;
+      console.log('✓ Team created with ID:', createdTeamId);
+
+      // Step 4: Create standings entry
+      console.log('Step 4: Creating standings entry...');
+      const { error: standingsError } = await supabase
+        .from('team_standings')
+        .insert([{ team_id: createdTeamId, points: 0 }]);
+
+      if (standingsError) {
+        console.error('Standings creation error:', standingsError);
+        throw new Error('Failed to create standings: ' + standingsError.message);
+      }
+
+      console.log('✓ Standings created');
+
+      console.log('=== LOGIN SUCCESS ===');
+      setUser({ id: createdTeamId, name: teamName });
     } catch (e) {
-      console.error('Login error:', e);
+      console.error('=== LOGIN FAILED ===');
+      console.error('Error:', e.message);
       setError('Login failed: ' + e.message);
     }
 
