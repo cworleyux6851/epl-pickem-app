@@ -1,0 +1,20 @@
+{
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
+  "framework": "react",
+  "functions": {
+    "api/fetch-epl-data.js": {
+      "runtime": "nodejs18.x",
+      "memory": 128,
+      "maxDuration": 30
+    }
+  },
+  "env": [
+    "SUPABASE_URL",
+    "SUPABASE_SERVICE_ROLE_KEY",
+    "FOOTBALL_DATA_API_KEY",
+    "REACT_APP_SUPABASE_URL",
+    "REACT_APP_SUPABASE_ANON_KEY"
+  ],
+  "regions": ["iad1"]
+}
