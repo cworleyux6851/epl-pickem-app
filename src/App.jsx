@@ -54,7 +54,7 @@ export default function App() {
         const picks = Object.entries(currentPicks)
           .filter(([, team]) => team)
           .map(([fixtureId, team]) => ({
-            team_id: user.id,
+            team_name: user.name,
             fixture_id: parseInt(fixtureId),
             matchday: currentWeek,
             picked_team: team
@@ -62,9 +62,14 @@ export default function App() {
 
         console.log('Saving picks:', JSON.stringify(picks, null, 2));
 
-        await supabase.from('picks').delete().eq('team_id', user.id).eq('matchday', currentWeek);
+        // Delete old picks
+        await supabase.from('picks').delete().eq('team_name', user.name).eq('matchday', currentWeek);
+        
+        // Insert new picks - don't specify columns, let Supabase figure it out
         if (picks.length > 0) {
-          const { error: insertError } = await supabase.from('picks').insert(picks);
+          const { error: insertError } = await supabase
+            .from('picks')
+            .insert(picks, { count: 'exact' });
           if (insertError) {
             console.error('Insert error:', insertError);
             return;
@@ -107,7 +112,7 @@ export default function App() {
         const { data: picks, error: picksError } = await supabase
           .from('picks')
           .select('*')
-          .eq('team_id', user.id)
+          .eq('team_name', user.name)
           .eq('matchday', currentWeek);
         
         if (picksError) {
@@ -190,7 +195,7 @@ export default function App() {
       }
 
       const leaderboardData = standings.map(s => ({
-        team_id: s.team_id,
+        team_name: s.team_name,
         name: s.team_name,
         points: s.points || 0
       }));
@@ -618,21 +623,21 @@ export default function App() {
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                   {leaderboard.map((team, idx) => (
                     <div 
-                      key={team.team_id} 
+                      key={team.team_name} 
                       style={{
                         display: 'grid',
                         gridTemplateColumns: 'auto 1fr auto',
                         gap: '12px',
                         padding: '12px',
                         borderRadius: '8px',
-                        background: team.team_id === user?.id ? '#e7f3ff' : '#f8f9fa',
-                        border: team.team_id === user?.id ? '2px solid #2a5298' : '1px solid #e0e0e0',
+                        background: team.team_name === user?.name ? '#e7f3ff' : '#f8f9fa',
+                        border: team.team_name === user?.name ? '2px solid #2a5298' : '1px solid #e0e0e0',
                         fontSize: '14px',
                         alignItems: 'center'
                       }}
                     >
                       <div style={{ fontWeight: 'bold', color: '#2a5298', minWidth: '20px' }}>{idx + 1}</div>
-                      <div style={{ fontWeight: 'bold', color: team.team_id === user?.id ? '#2a5298' : '#333' }}>{team.name}</div>
+                      <div style={{ fontWeight: 'bold', color: team.team_name === user?.name ? '#2a5298' : '#333' }}>{team.name}</div>
                       <div style={{ fontWeight: 'bold', color: '#28a745' }}>{team.points}pts</div>
                     </div>
                   ))}
