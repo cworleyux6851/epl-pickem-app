@@ -47,7 +47,6 @@ const formatLockDateTime = (isoString) => {
 export default function App() {
   const [user, setUser] = useState(null);
   const [teamName, setTeamName] = useState('');
-  const [password, setPassword] = useState('');
   const [leaguePassword, setLeaguePassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -258,6 +257,26 @@ export default function App() {
     setError('');
 
     try {
+      // Get league password to verify
+      const { data: league } = await supabase
+        .from('league_config')
+        .select('password')
+        .single();
+
+      if (!league) {
+        setError('League not found - create league first');
+        setLoading(false);
+        return;
+      }
+
+      // Check league password
+      if (league.password !== leaguePassword) {
+        setError('Incorrect league password');
+        setLoading(false);
+        return;
+      }
+
+      // Check if team exists
       const { data: existingTeam } = await supabase
         .from('teams')
         .select('*')
@@ -265,28 +284,24 @@ export default function App() {
         .single();
 
       if (existingTeam) {
-        if (existingTeam.password !== password) {
-          setError('Incorrect password');
-          setLoading(false);
-          return;
-        }
-
-        const { data: league } = await supabase
-          .from('league_config')
-          .select('password')
-          .single();
-
-        if (league && league.password !== leaguePassword) {
-          setError('Incorrect league password');
-          setLoading(false);
-          return;
-        }
-
+        // Team exists, log them in
         setUser({ id: existingTeam.id, name: teamName });
       } else {
-        setError('Team not found');
-        setLoading(false);
-        return;
+        // Team doesn't exist - auto-create it
+        const { data: newTeam, error: teamError } = await supabase
+          .from('teams')
+          .insert([{ name: teamName, password: '' }])
+          .select()
+          .single();
+
+        if (teamError) throw teamError;
+
+        // Create standings entry
+        await supabase
+          .from('team_standings')
+          .insert([{ team_id: newTeam.id, points: 0 }]);
+
+        setUser({ id: newTeam.id, name: teamName });
       }
     } catch (e) {
       console.error('Login error:', e);
@@ -313,20 +328,23 @@ export default function App() {
         return;
       }
 
-      const { data: newTeam, error: teamError } = await supabase
-        .from('teams')
-        .insert([{ name: teamName, password }])
-        .select()
-        .single();
-
-      if (teamError) throw teamError;
-
+      // Create league config first
       const { error: leagueError } = await supabase
         .from('league_config')
         .insert([{ password: leaguePassword }]);
 
       if (leagueError) throw leagueError;
 
+      // Create team (no individual password needed)
+      const { data: newTeam, error: teamError } = await supabase
+        .from('teams')
+        .insert([{ name: teamName, password: '' }])
+        .select()
+        .single();
+
+      if (teamError) throw teamError;
+
+      // Create standings
       const { error: standingsError } = await supabase
         .from('team_standings')
         .insert([{ team_id: newTeam.id, points: 0 }]);
@@ -399,17 +417,9 @@ export default function App() {
               <form onSubmit={handleLogin} style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
                 <input 
                   type="text" 
-                  placeholder="Team name" 
+                  placeholder="Your team name" 
                   value={teamName} 
                   onChange={e => setTeamName(e.target.value)}
-                  style={{ padding: '12px', border: '2px solid #ddd', borderRadius: '8px', fontSize: '16px' }}
-                  required 
-                />
-                <input 
-                  type="password" 
-                  placeholder="Team password" 
-                  value={password} 
-                  onChange={e => setPassword(e.target.value)}
                   style={{ padding: '12px', border: '2px solid #ddd', borderRadius: '8px', fontSize: '16px' }}
                   required 
                 />
@@ -443,14 +453,6 @@ export default function App() {
                   placeholder="Your team name" 
                   value={teamName} 
                   onChange={e => setTeamName(e.target.value)}
-                  style={{ padding: '12px', border: '2px solid #ddd', borderRadius: '8px', fontSize: '16px' }}
-                  required 
-                />
-                <input 
-                  type="password" 
-                  placeholder="Your team password" 
-                  value={password} 
-                  onChange={e => setPassword(e.target.value)}
                   style={{ padding: '12px', border: '2px solid #ddd', borderRadius: '8px', fontSize: '16px' }}
                   required 
                 />
