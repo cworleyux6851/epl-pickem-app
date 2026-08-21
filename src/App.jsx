@@ -213,40 +213,7 @@ export default function App() {
       console.log('=== LOGIN START ===');
       console.log('Team name:', teamName);
 
-      // Step 1: Check league password
-      console.log('Step 1: Checking league password...');
-      const { data: league, error: leagueError } = await supabase
-        .from('league_config')
-        .select('password')
-        .single();
-
-      if (leagueError) {
-        console.error('League fetch error:', leagueError);
-        setError('League not found. Create a league first.');
-        setLoading(false);
-        return;
-      }
-
-      if (!league) {
-        console.error('No league data returned');
-        setError('League not configured.');
-        setLoading(false);
-        return;
-      }
-
-      console.log('League password on file:', league.password);
-
-      if (league.password !== leaguePassword) {
-        console.error('Password mismatch. Got:', leaguePassword, 'Expected:', league.password);
-        setError('Incorrect league password');
-        setLoading(false);
-        return;
-      }
-
-      console.log('✓ Password correct');
-
-      // Step 2: Check if team exists
-      console.log('Step 2: Checking if team exists...');
+      // Check if team exists
       const { data: existingTeams, error: teamCheckError } = await supabase
         .from('teams')
         .select('*')
@@ -257,50 +224,16 @@ export default function App() {
         throw new Error('Failed to check team: ' + teamCheckError.message);
       }
 
-      console.log('Existing teams found:', existingTeams?.length || 0);
-      console.log('Raw Supabase response:', JSON.stringify(existingTeams, null, 2));
+      console.log('Teams found:', existingTeams?.length || 0);
 
-      if (existingTeams && existingTeams.length > 0) {
-        console.log('✓ Team exists, logging in');
-        console.log('Team data:', existingTeams[0]);
-        setUser({ name: teamName });
+      if (!existingTeams || existingTeams.length === 0) {
+        console.log('Team does not exist');
+        setError('Team not found. Use "Create New Team" to join the league.');
         setLoading(false);
         return;
       }
 
-      // Step 3: Create new team
-      console.log('Step 3: Creating new team...');
-      const { data: newTeam, error: createError } = await supabase
-        .from('teams')
-        .insert([{ name: teamName }])
-        .select();
-
-      if (createError) {
-        console.error('Team creation error:', createError);
-        throw new Error('Failed to create team: ' + createError.message);
-      }
-
-      if (!newTeam || newTeam.length === 0) {
-        console.error('Team insert returned no data');
-        throw new Error('Team creation returned no data');
-      }
-
-      console.log('✓ Team created');
-
-      // Step 4: Create standings entry
-      console.log('Step 4: Creating standings entry...');
-      const { error: standingsError } = await supabase
-        .from('team_standings')
-        .insert([{ team_name: teamName, points: 0 }]);
-
-      if (standingsError) {
-        console.error('Standings creation error:', standingsError);
-        throw new Error('Failed to create standings: ' + standingsError.message);
-      }
-
-      console.log('✓ Standings created');
-
-      console.log('=== LOGIN SUCCESS ===');
+      console.log('✓ Team exists, logging in');
       setUser({ name: teamName });
     } catch (e) {
       console.error('=== LOGIN FAILED ===');
@@ -311,45 +244,65 @@ export default function App() {
     setLoading(false);
   };
 
-  const handleCreateLeague = async (e) => {
+  const handleCreateTeam = async (e) => {
     e.preventDefault();
     setLoading(true);
     setError('');
 
     try {
-      const { data: existingLeague } = await supabase
+      // Verify league password
+      const { data: league, error: leagueError } = await supabase
         .from('league_config')
-        .select('id')
+        .select('password')
         .single();
 
-      if (existingLeague) {
-        setError('League already exists. Use Login tab.');
+      if (leagueError) {
+        setError('League not found. Ask admin to create it first.');
         setLoading(false);
         return;
       }
 
-      // Create league
-      await supabase
-        .from('league_config')
-        .insert([{ password: leaguePassword }]);
+      if (league.password !== leaguePassword) {
+        setError('Incorrect league password');
+        setLoading(false);
+        return;
+      }
 
-      // Create first team
-      const { data: newTeam } = await supabase
+      // Check if team already exists
+      const { data: existingTeams, error: checkError } = await supabase
+        .from('teams')
+        .select('*')
+        .eq('name', teamName);
+
+      if (checkError) throw new Error(checkError.message);
+
+      if (existingTeams && existingTeams.length > 0) {
+        setError('Team name already exists. Choose a different name.');
+        setLoading(false);
+        return;
+      }
+
+      // Create new team
+      const { data: newTeam, error: createError } = await supabase
         .from('teams')
         .insert([{ name: teamName }])
         .select()
         .single();
 
-      // Create standings
-      await supabase
+      if (createError) throw new Error(createError.message);
+
+      // Create standings entry
+      const { error: standingsError } = await supabase
         .from('team_standings')
         .insert([{ team_name: teamName, points: 0 }]);
+
+      if (standingsError) throw new Error(standingsError.message);
 
       setUser({ name: teamName });
       setIsCreating(false);
     } catch (e) {
-      console.error('Create league error:', e);
-      setError('Failed to create league');
+      console.error('Create team error:', e);
+      setError('Failed to create team: ' + e.message);
     }
 
     setLoading(false);
@@ -421,6 +374,32 @@ export default function App() {
                   style={{ padding: '12px', border: '2px solid #ddd', borderRadius: '8px', fontSize: '16px' }}
                   required 
                 />
+                <button 
+                  type="submit" 
+                  disabled={loading}
+                  style={{ padding: '12px', background: '#2a5298', color: 'white', border: 'none', borderRadius: '8px', fontSize: '16px', fontWeight: 'bold', cursor: 'pointer' }}
+                >
+                  {loading ? 'Logging in...' : 'Login'}
+                </button>
+              </form>
+              {error && <div style={{ marginTop: '15px', padding: '12px', background: '#fee', border: '1px solid #fcc', borderRadius: '8px', color: '#c00', fontSize: '14px' }}>{error}</div>}
+              
+              <p style={{ marginTop: '25px', textAlign: 'center', fontSize: '14px' }}>
+                <button onClick={() => { setIsCreating(true); setError(''); setTeamName(''); setLeaguePassword(''); }} style={{ background: 'none', border: 'none', color: '#2a5298', cursor: 'pointer', textDecoration: 'underline', fontWeight: 'bold' }}>Create new team</button>
+              </p>
+            </>
+          ) : (
+            <>
+              <h2 style={{ fontSize: '20px', color: '#333', marginBottom: '20px' }}>Create New Team</h2>
+              <form onSubmit={handleCreateTeam} style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
+                <input 
+                  type="text" 
+                  placeholder="Your team name" 
+                  value={teamName} 
+                  onChange={e => setTeamName(e.target.value)}
+                  style={{ padding: '12px', border: '2px solid #ddd', borderRadius: '8px', fontSize: '16px' }}
+                  required 
+                />
                 <input 
                   type="password" 
                   placeholder="League password" 
@@ -434,47 +413,13 @@ export default function App() {
                   disabled={loading}
                   style={{ padding: '12px', background: '#2a5298', color: 'white', border: 'none', borderRadius: '8px', fontSize: '16px', fontWeight: 'bold', cursor: 'pointer' }}
                 >
-                  {loading ? 'Logging in...' : 'Login'}
+                  {loading ? 'Creating...' : 'Create Team'}
                 </button>
               </form>
               {error && <div style={{ marginTop: '15px', padding: '12px', background: '#fee', border: '1px solid #fcc', borderRadius: '8px', color: '#c00', fontSize: '14px' }}>{error}</div>}
               
               <p style={{ marginTop: '25px', textAlign: 'center', fontSize: '14px' }}>
-                <button onClick={() => { setIsCreating(true); setError(''); }} style={{ background: 'none', border: 'none', color: '#2a5298', cursor: 'pointer', textDecoration: 'underline', fontWeight: 'bold' }}>Create new league</button>
-              </p>
-            </>
-          ) : (
-            <>
-              <h2 style={{ fontSize: '20px', color: '#333', marginBottom: '20px' }}>Create League</h2>
-              <form onSubmit={handleCreateLeague} style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
-                <input 
-                  type="text" 
-                  placeholder="Your team name" 
-                  value={teamName} 
-                  onChange={e => setTeamName(e.target.value)}
-                  style={{ padding: '12px', border: '2px solid #ddd', borderRadius: '8px', fontSize: '16px' }}
-                  required 
-                />
-                <input 
-                  type="password" 
-                  placeholder="League password (share with friends)" 
-                  value={leaguePassword} 
-                  onChange={e => setLeaguePassword(e.target.value)}
-                  style={{ padding: '12px', border: '2px solid #ddd', borderRadius: '8px', fontSize: '16px' }}
-                  required 
-                />
-                <button 
-                  type="submit" 
-                  disabled={loading}
-                  style={{ padding: '12px', background: '#2a5298', color: 'white', border: 'none', borderRadius: '8px', fontSize: '16px', fontWeight: 'bold', cursor: 'pointer' }}
-                >
-                  {loading ? 'Creating...' : 'Create League'}
-                </button>
-              </form>
-              {error && <div style={{ marginTop: '15px', padding: '12px', background: '#fee', border: '1px solid #fcc', borderRadius: '8px', color: '#c00', fontSize: '14px' }}>{error}</div>}
-              
-              <p style={{ marginTop: '25px', textAlign: 'center', fontSize: '14px' }}>
-                <button onClick={() => { setIsCreating(false); setError(''); }} style={{ background: 'none', border: 'none', color: '#2a5298', cursor: 'pointer', textDecoration: 'underline', fontWeight: 'bold' }}>Back to login</button>
+                <button onClick={() => { setIsCreating(false); setError(''); setTeamName(''); setLeaguePassword(''); }} style={{ background: 'none', border: 'none', color: '#2a5298', cursor: 'pointer', textDecoration: 'underline', fontWeight: 'bold' }}>Back to login</button>
               </p>
             </>
           )}
