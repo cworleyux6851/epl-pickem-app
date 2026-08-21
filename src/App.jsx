@@ -30,20 +30,6 @@ const formatGameTime = (isoString) => {
   }) + ' CST';
 };
 
-const formatLockDateTime = (isoString) => {
-  const cstDate = convertToCST(isoString);
-  const lockTime = new Date(cstDate.getTime() - 60 * 60 * 1000);
-  return lockTime.toLocaleString('en-US', {
-    weekday: 'short',
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-    hour12: true,
-    timeZone: 'America/Chicago'
-  }) + ' CST';
-};
-
 export default function App() {
   const [user, setUser] = useState(null);
   const [teamName, setTeamName] = useState('');
@@ -53,23 +39,20 @@ export default function App() {
   const [isCreating, setIsCreating] = useState(false);
   const [allFixtures, setAllFixtures] = useState([]);
   const [currentPicks, setCurrentPicks] = useState({});
-  const [prevWeekPicks, setPrevWeekPicks] = useState({});
   const [leaderboard, setLeaderboard] = useState([]);
   const [currentWeek, setCurrentWeek] = useState(null);
   const [selectedWeek, setSelectedWeek] = useState(null);
-  const [lockDateTime, setLockDateTime] = useState(null);
   const [saveStatus, setSaveStatus] = useState('');
   const [fixturesLoading, setFixturesLoading] = useState(true);
-  const [fixturesError, setFixturesError] = useState(null);
 
-  // Auto-save picks
+  // Auto-save picks when they change
   useEffect(() => {
     if (!user || Object.keys(currentPicks).length === 0 || selectedWeek !== currentWeek) return;
 
     const savePicks = async () => {
       try {
         const picks = Object.entries(currentPicks)
-          .filter(([fixtureId, team]) => team)
+          .filter(([, team]) => team)
           .map(([fixtureId, team]) => ({
             team_id: user.id,
             fixture_id: parseInt(fixtureId),
@@ -94,12 +77,12 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [currentPicks, user, currentWeek, selectedWeek]);
 
-  // Load fixtures
+  // Load fixtures on mount
   useEffect(() => {
-    loadFixturesWithCache();
+    loadFixtures();
   }, []);
 
-  // Load user picks when logged in
+  // Load user's picks when logged in
   useEffect(() => {
     if (!user || !currentWeek) return;
 
@@ -111,7 +94,7 @@ export default function App() {
           .eq('team_id', user.id)
           .eq('matchday', currentWeek);
         
-        if (picks) {
+        if (picks && picks.length > 0) {
           const picksMap = {};
           picks.forEach(p => {
             picksMap[p.fixture_id] = p.picked_team;
@@ -126,6 +109,7 @@ export default function App() {
     loadUserPicks();
   }, [user, currentWeek]);
 
+  // Load leaderboard
   useEffect(() => {
     if (user) {
       loadLeaderboard();
@@ -134,231 +118,22 @@ export default function App() {
     }
   }, [user]);
 
-  useEffect(() => {
-    const weekFixtures = getFixturesForWeek(selectedWeek || currentWeek);
-    if (weekFixtures.length === 0 || selectedWeek !== currentWeek) return;
-    
-    const firstGame = weekFixtures.find(f => f.status !== 'FINISHED');
-    if (!firstGame) {
-      setLockDateTime('All games finished');
-      return;
-    }
-
-    setLockDateTime(formatLockDateTime(firstGame.utc_date));
-  }, [allFixtures, selectedWeek, currentWeek]);
-
-  useEffect(() => {
-    if (!user || !currentWeek) return;
-
-    const loadPrevWeekPicks = async () => {
-      try {
-        const { data: picks } = await supabase
-          .from('picks')
-          .select('picked_team')
-          .eq('team_id', user.id)
-          .eq('matchday', currentWeek - 1);
-        
-        if (picks) {
-          const prevPicks = {};
-          picks.forEach(p => {
-            prevPicks[p.picked_team] = true;
-          });
-          setPrevWeekPicks(prevPicks);
-        }
-      } catch (e) {
-        console.error('Error loading prev week picks:', e);
-      }
-    };
-
-    loadPrevWeekPicks();
-  }, [user, currentWeek]);
-
-  const loadFixturesWithCache = async () => {
+  const loadFixtures = async () => {
     try {
       setFixturesLoading(true);
-      setFixturesError(null);
+      const res = await fetch('/api/fetch-epl-data');
+      const data = await res.json();
       
-      const cachedData = localStorage.getItem('epl_fixtures_cache');
-      const cacheTimestamp = localStorage.getItem('epl_fixtures_cache_time');
-      const now = Date.now();
-      const cacheAge = cacheTimestamp ? now - parseInt(cacheTimestamp) : null;
-      const ONE_DAY = 24 * 60 * 60 * 1000;
-      
-      let usedCache = false;
-      let data = null;
-
-      if (cachedData && cacheAge && cacheAge < ONE_DAY) {
-        const cached = JSON.parse(cachedData);
-        const hasLiveOrFinished = cached.fixtures.some(f => 
-          f.status === 'LIVE' || f.status === 'FINISHED'
-        );
-        
-        if (!hasLiveOrFinished) {
-          data = cached;
-          usedCache = true;
-          console.log('✅ Using cached fixtures');
-        }
-      }
-
-      if (!usedCache) {
-        console.log('📡 Fetching fresh EPL data...');
-        const res = await fetch('/api/fetch-epl-data');
-        
-        if (!res.ok) {
-          throw new Error(`API error: ${res.status} ${res.statusText}`);
-        }
-        
-        const freshData = await res.json();
-        
-        if (freshData.fixtures && freshData.fixtures.length > 0) {
-          localStorage.setItem('epl_fixtures_cache', JSON.stringify(freshData));
-          localStorage.setItem('epl_fixtures_cache_time', now.toString());
-          data = freshData;
-          console.log('✅ Fetched fresh data');
-        } else {
-          throw new Error('No fixtures returned from API');
-        }
-      }
-
-      if (data && data.fixtures && data.fixtures.length > 0) {
+      if (data.fixtures && data.fixtures.length > 0) {
         setAllFixtures(data.fixtures);
         setCurrentWeek(data.currentMatchday);
         setSelectedWeek(data.currentMatchday);
-        
-        if (user) {
-          const { data: picks } = await supabase.from('picks').select('*').eq('team_id', user.id).eq('matchday', data.currentMatchday);
-          if (picks) {
-            const picksMap = {};
-            picks.forEach(p => {
-              picksMap[p.fixture_id] = p.picked_team;
-            });
-            setCurrentPicks(picksMap);
-          }
-        }
-      } else {
-        throw new Error('Failed to load any fixture data');
       }
       setFixturesLoading(false);
     } catch (e) {
-      console.error('❌ Failed to load fixtures:', e);
-      setFixturesError(e.message);
+      console.error('Error loading fixtures:', e);
       setFixturesLoading(false);
     }
-  };
-
-  const getFixturesForWeek = (week) => {
-    if (!week) return [];
-    return allFixtures.filter(f => f.matchday === week && isWeekend(f.utc_date));
-  };
-
-  const handleLogin = async (e) => {
-    e.preventDefault();
-    setLoading(true);
-    setError('');
-
-    try {
-      // Get league password to verify
-      const { data: league } = await supabase
-        .from('league_config')
-        .select('password')
-        .single();
-
-      if (!league) {
-        setError('League not found - create league first');
-        setLoading(false);
-        return;
-      }
-
-      // Check league password
-      if (league.password !== leaguePassword) {
-        setError('Incorrect league password');
-        setLoading(false);
-        return;
-      }
-
-      // Check if team exists
-      const { data: existingTeam } = await supabase
-        .from('teams')
-        .select('*')
-        .eq('name', teamName)
-        .single();
-
-      if (existingTeam) {
-        // Team exists, log them in
-        setUser({ id: existingTeam.id, name: teamName });
-      } else {
-        // Team doesn't exist - auto-create it
-        const { data: newTeam, error: teamError } = await supabase
-          .from('teams')
-          .insert([{ name: teamName, password: '' }])
-          .select()
-          .single();
-
-        if (teamError) throw teamError;
-
-        // Create standings entry
-        await supabase
-          .from('team_standings')
-          .insert([{ team_id: newTeam.id, points: 0 }]);
-
-        setUser({ id: newTeam.id, name: teamName });
-      }
-    } catch (e) {
-      console.error('Login error:', e);
-      setError('Login failed');
-    }
-
-    setLoading(false);
-  };
-
-  const handleCreateLeague = async (e) => {
-    e.preventDefault();
-    setLoading(true);
-    setError('');
-
-    try {
-      const { data: existingLeague } = await supabase
-        .from('league_config')
-        .select('*')
-        .single();
-
-      if (existingLeague) {
-        setError('League already exists');
-        setLoading(false);
-        return;
-      }
-
-      // Create league config first
-      const { error: leagueError } = await supabase
-        .from('league_config')
-        .insert([{ password: leaguePassword }]);
-
-      if (leagueError) throw leagueError;
-
-      // Create team (no individual password needed)
-      const { data: newTeam, error: teamError } = await supabase
-        .from('teams')
-        .insert([{ name: teamName, password: '' }])
-        .select()
-        .single();
-
-      if (teamError) throw teamError;
-
-      // Create standings
-      const { error: standingsError } = await supabase
-        .from('team_standings')
-        .insert([{ team_id: newTeam.id, points: 0 }]);
-
-      if (standingsError) throw standingsError;
-
-      setUser({ id: newTeam.id, name: teamName });
-      setIsCreating(false);
-    } catch (e) {
-      console.error('Create league error:', e);
-      setError('Failed to create league');
-    }
-
-    setLoading(false);
   };
 
   const loadLeaderboard = async () => {
@@ -381,11 +156,114 @@ export default function App() {
     }
   };
 
-  const togglePick = (fixtureId, teamName) => {
-    if (selectedWeek !== currentWeek) return;
+  const handleLogin = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    setError('');
 
-    if (prevWeekPicks[teamName]) {
-      setError(`Can't pick ${teamName} two weeks in a row`);
+    try {
+      // Check league password
+      const { data: league, error: leagueError } = await supabase
+        .from('league_config')
+        .select('password')
+        .single();
+
+      if (leagueError || !league) {
+        setError('League not found. Create a league first.');
+        setLoading(false);
+        return;
+      }
+
+      if (league.password !== leaguePassword) {
+        setError('Incorrect league password');
+        setLoading(false);
+        return;
+      }
+
+      // Check if team exists
+      const { data: existingTeam, error: teamCheckError } = await supabase
+        .from('teams')
+        .select('id')
+        .eq('name', teamName)
+        .single();
+
+      if (existingTeam) {
+        // Team exists, log in
+        setUser({ id: existingTeam.id, name: teamName });
+      } else {
+        // Team doesn't exist, auto-create it
+        const { data: newTeam, error: createError } = await supabase
+          .from('teams')
+          .insert([{ name: teamName }])
+          .select()
+          .single();
+
+        if (createError || !newTeam) {
+          throw new Error('Failed to create team');
+        }
+
+        // Create standings entry
+        await supabase
+          .from('team_standings')
+          .insert([{ team_id: newTeam.id, points: 0 }]);
+
+        setUser({ id: newTeam.id, name: teamName });
+      }
+    } catch (e) {
+      console.error('Login error:', e);
+      setError('Login failed: ' + e.message);
+    }
+
+    setLoading(false);
+  };
+
+  const handleCreateLeague = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    setError('');
+
+    try {
+      const { data: existingLeague } = await supabase
+        .from('league_config')
+        .select('id')
+        .single();
+
+      if (existingLeague) {
+        setError('League already exists. Use Login tab.');
+        setLoading(false);
+        return;
+      }
+
+      // Create league
+      await supabase
+        .from('league_config')
+        .insert([{ password: leaguePassword }]);
+
+      // Create first team
+      const { data: newTeam } = await supabase
+        .from('teams')
+        .insert([{ name: teamName }])
+        .select()
+        .single();
+
+      // Create standings
+      await supabase
+        .from('team_standings')
+        .insert([{ team_id: newTeam.id, points: 0 }]);
+
+      setUser({ id: newTeam.id, name: teamName });
+      setIsCreating(false);
+    } catch (e) {
+      console.error('Create league error:', e);
+      setError('Failed to create league');
+    }
+
+    setLoading(false);
+  };
+
+  const togglePick = (fixtureId, teamName) => {
+    if (selectedWeek !== currentWeek) {
+      setError('You can only pick for the current week');
       setTimeout(() => setError(''), 3000);
       return;
     }
@@ -401,13 +279,21 @@ export default function App() {
     });
   };
 
+  const getFixturesForWeek = (week) => {
+    if (!week) return [];
+    return allFixtures
+      .filter(f => f.matchday === week && isWeekend(f.utc_date))
+      .sort((a, b) => new Date(a.utc_date) - new Date(b.utc_date));
+  };
+
   const fixtures = getFixturesForWeek(selectedWeek || currentWeek);
   const pickCount = Object.keys(currentPicks).filter(k => currentPicks[k]).length;
   const isCurrentWeek = selectedWeek === currentWeek;
 
+  // LOGIN PAGE
   if (!user) {
     return (
-      <div style={{ minHeight: '100vh', background: 'linear-gradient(135deg, #1e3c72 0%, #2a5298 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'system-ui, -apple-system', padding: '20px' }}>
+      <div style={{ minHeight: '100vh', background: 'linear-gradient(135deg, #1e3c72 0%, #2a5298 100%)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'system-ui', padding: '20px' }}>
         <div style={{ width: '100%', maxWidth: '400px', background: 'white', borderRadius: '12px', padding: '40px', boxShadow: '0 20px 60px rgba(0,0,0,0.3)' }}>
           <h1 style={{ textAlign: 'center', color: '#1e3c72', marginTop: 0, marginBottom: '30px', fontSize: '32px' }}>⚽ EPL Pick'em</h1>
 
@@ -440,6 +326,7 @@ export default function App() {
                 </button>
               </form>
               {error && <div style={{ marginTop: '15px', padding: '12px', background: '#fee', border: '1px solid #fcc', borderRadius: '8px', color: '#c00', fontSize: '14px' }}>{error}</div>}
+              
               <p style={{ marginTop: '25px', textAlign: 'center', fontSize: '14px' }}>
                 <button onClick={() => { setIsCreating(true); setError(''); }} style={{ background: 'none', border: 'none', color: '#2a5298', cursor: 'pointer', textDecoration: 'underline', fontWeight: 'bold' }}>Create new league</button>
               </p>
@@ -473,6 +360,7 @@ export default function App() {
                 </button>
               </form>
               {error && <div style={{ marginTop: '15px', padding: '12px', background: '#fee', border: '1px solid #fcc', borderRadius: '8px', color: '#c00', fontSize: '14px' }}>{error}</div>}
+              
               <p style={{ marginTop: '25px', textAlign: 'center', fontSize: '14px' }}>
                 <button onClick={() => { setIsCreating(false); setError(''); }} style={{ background: 'none', border: 'none', color: '#2a5298', cursor: 'pointer', textDecoration: 'underline', fontWeight: 'bold' }}>Back to login</button>
               </p>
@@ -483,18 +371,17 @@ export default function App() {
     );
   }
 
+  // MAIN APP PAGE
   return (
-    <div style={{ minHeight: '100vh', background: '#f5f7fa', fontFamily: 'system-ui, -apple-system' }}>
+    <div style={{ minHeight: '100vh', background: '#f5f7fa', fontFamily: 'system-ui' }}>
       <div style={{ background: 'linear-gradient(135deg, #1e3c72 0%, #2a5298 100%)', color: 'white', padding: '16px 20px', boxShadow: '0 4px 12px rgba(0,0,0,0.15)' }}>
-        <div style={{ maxWidth: '1400px', margin: '0 auto', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
-          <h1 style={{ margin: 0, fontSize: 'clamp(20px, 5vw, 28px)' }}>⚽ EPL Pick'em</h1>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', fontSize: 'clamp(14px, 4vw, 16px)' }}>
-            <span>{user.name}</span>
+        <div style={{ maxWidth: '1400px', margin: '0 auto', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <h1 style={{ margin: 0, fontSize: '28px' }}>⚽ EPL Pick'em</h1>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <span style={{ fontSize: '16px' }}>{user.name}</span>
             <button 
               onClick={() => setUser(null)}
-              style={{ padding: '6px 12px', background: 'rgba(255,255,255,0.2)', color: 'white', border: '1px solid white', borderRadius: '6px', cursor: 'pointer', fontSize: 'clamp(12px, 3vw, 14px)', fontWeight: 'bold' }}
-              onMouseEnter={e => e.target.style.background = 'rgba(255,255,255,0.3)'}
-              onMouseLeave={e => e.target.style.background = 'rgba(255,255,255,0.2)'}
+              style={{ padding: '6px 12px', background: 'rgba(255,255,255,0.2)', color: 'white', border: '1px solid white', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold' }}
             >
               Logout
             </button>
@@ -504,41 +391,40 @@ export default function App() {
 
       <div style={{ maxWidth: '1400px', margin: '0 auto', padding: '20px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(350px, 1fr))', gap: '20px' }}>
         <div style={{ gridColumn: 'span 2' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '20px', flexWrap: 'wrap' }}>
+          {/* Week Navigation */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '20px' }}>
             <button 
               onClick={() => setSelectedWeek(Math.max(1, selectedWeek - 1))} 
               disabled={selectedWeek <= 1}
-              style={{ padding: '8px 12px', background: '#2a5298', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold', transition: 'opacity 0.2s', opacity: selectedWeek <= 1 ? 0.5 : 1, fontSize: 'clamp(12px, 3vw, 14px)' }}
+              style={{ padding: '8px 12px', background: '#2a5298', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold', opacity: selectedWeek <= 1 ? 0.5 : 1 }}
             >
               ← Prev
             </button>
-            <h2 style={{ margin: 0, fontSize: 'clamp(18px, 5vw, 24px)', color: '#1e3c72' }}>
-              Matchday {selectedWeek} {isCurrentWeek ? <span style={{ fontSize: 'clamp(12px, 3vw, 14px)', color: '#666' }}>(Current)</span> : <span style={{ fontSize: 'clamp(12px, 3vw, 14px)', color: '#999' }}>(View)</span>}
+            <h2 style={{ margin: 0, fontSize: '24px', color: '#1e3c72' }}>
+              Matchday {selectedWeek} {isCurrentWeek ? <span style={{ fontSize: '14px', color: '#666' }}>(Current)</span> : <span style={{ fontSize: '14px', color: '#999' }}>(View)</span>}
             </h2>
             <button 
               onClick={() => setSelectedWeek(Math.min(38, selectedWeek + 1))} 
               disabled={selectedWeek >= 38}
-              style={{ padding: '8px 12px', background: '#2a5298', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold', opacity: selectedWeek >= 38 ? 0.5 : 1, fontSize: 'clamp(12px, 3vw, 14px)' }}
+              style={{ padding: '8px 12px', background: '#2a5298', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold', opacity: selectedWeek >= 38 ? 0.5 : 1 }}
             >
               Next →
             </button>
           </div>
 
-          {isCurrentWeek && lockDateTime && (
-            <div style={{ marginBottom: '16px', padding: '12px', background: '#e7f3ff', borderLeft: '4px solid #2a5298', borderRadius: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px', fontSize: 'clamp(12px, 3vw, 14px)' }}>
-              <div>
-                <strong>🔒 Picks lock: {lockDateTime}</strong>
-              </div>
+          {isCurrentWeek && (
+            <div style={{ marginBottom: '16px', padding: '12px', background: '#e7f3ff', borderLeft: '4px solid #2a5298', borderRadius: '8px', display: 'flex', justifyContent: 'space-between' }}>
+              <strong>🔒 Making picks for this week</strong>
               {saveStatus && <div style={{ color: '#28a745', fontWeight: 'bold' }}>{saveStatus}</div>}
             </div>
           )}
 
-          {!isCurrentWeek && <div style={{ marginBottom: '16px', padding: '12px', background: '#e9ecef', borderRadius: '8px', color: '#666', fontSize: 'clamp(12px, 3vw, 14px)' }}>View only - edit picks in current week</div>}
+          {!isCurrentWeek && <div style={{ marginBottom: '16px', padding: '12px', background: '#e9ecef', borderRadius: '8px', color: '#666' }}>View only - edit picks in current week</div>}
 
           {isCurrentWeek && (
             <div style={{ marginBottom: '16px', padding: '12px', background: 'white', borderRadius: '8px', boxShadow: '0 2px 8px rgba(0,0,0,0.08)' }}>
-              <div style={{ fontSize: 'clamp(14px, 4vw, 18px)', fontWeight: 'bold', color: pickCount === 5 ? '#28a745' : '#1e3c72', marginBottom: '8px' }}>
-                Picks: <span style={{ fontSize: 'clamp(18px, 5vw, 24px)' }}>{pickCount}</span>/5
+              <div style={{ fontSize: '18px', fontWeight: 'bold', color: pickCount === 5 ? '#28a745' : '#1e3c72', marginBottom: '8px' }}>
+                Picks: {pickCount}/5
               </div>
               <div style={{ height: '8px', background: '#e9ecef', borderRadius: '4px', overflow: 'hidden' }}>
                 <div style={{ height: '100%', background: pickCount === 5 ? '#28a745' : '#2a5298', width: `${(pickCount / 5) * 100}%`, transition: 'width 0.3s' }} />
@@ -546,124 +432,73 @@ export default function App() {
             </div>
           )}
 
-          {error && <div style={{ marginBottom: '16px', padding: '12px', background: '#fee', border: '1px solid #fcc', borderRadius: '8px', color: '#c00', fontSize: 'clamp(12px, 3vw, 14px)' }}>{error}</div>}
+          {error && <div style={{ marginBottom: '16px', padding: '12px', background: '#fee', border: '1px solid #fcc', borderRadius: '8px', color: '#c00' }}>{error}</div>}
 
-          {fixturesError && (
-            <div style={{ marginBottom: '16px', padding: '16px', background: '#fee', border: '2px solid #fcc', borderRadius: '8px', color: '#c00' }}>
-              <div style={{ fontSize: 'clamp(14px, 4vw, 16px)', fontWeight: 'bold', marginBottom: '8px' }}>❌ Error loading matches</div>
-              <div style={{ fontSize: 'clamp(12px, 3vw, 14px)', marginBottom: '12px' }}>{fixturesError}</div>
-              <button 
-                onClick={() => loadFixturesWithCache()}
-                style={{ padding: '8px 16px', background: '#c00', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold', fontSize: 'clamp(12px, 3vw, 14px)' }}
-              >
-                🔄 Retry
-              </button>
-            </div>
-          )}
-          
+          {/* Fixtures */}
           {fixturesLoading ? (
-            <div style={{ padding: '40px', textAlign: 'center', color: '#999' }}>
-              <div style={{ fontSize: 'clamp(14px, 4vw, 16px)', marginBottom: '8px' }}>Loading matches...</div>
-              <div style={{ fontSize: 'clamp(12px, 3vw, 14px)', color: '#bbb' }}>Fetching latest EPL fixtures...</div>
-            </div>
+            <div style={{ padding: '40px', textAlign: 'center', color: '#999' }}>Loading matches...</div>
           ) : fixtures.length === 0 ? (
             <div style={{ padding: '40px', textAlign: 'center', color: '#999' }}>No weekend matches</div>
           ) : (
             <div style={{ display: 'grid', gap: '12px' }}>
               {fixtures.map(f => {
                 const isFinished = f.status === 'FINISHED';
-                const bgColor = isFinished ? '#f5f5f5' : '#ffffff';
-                const borderColor = isFinished ? '#d0d0d0' : '#e0e0e0';
-                
                 return (
                   <div 
                     key={f.id}
                     style={{ 
-                      background: bgColor,
+                      background: isFinished ? '#f5f5f5' : '#ffffff',
                       borderRadius: '12px',
                       boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
                       overflow: 'hidden',
-                      transition: 'all 0.2s',
-                      border: `1px solid ${borderColor}`,
+                      border: `1px solid ${isFinished ? '#d0d0d0' : '#e0e0e0'}`,
                       opacity: isFinished ? 0.85 : 1
                     }}
-                    onMouseEnter={e => {
-                      if (!isFinished) {
-                        e.currentTarget.style.boxShadow = '0 8px 24px rgba(0,0,0,0.12)';
-                        e.currentTarget.style.transform = 'translateY(-2px)';
-                      }
-                    }}
-                    onMouseLeave={e => {
-                      e.currentTarget.style.boxShadow = '0 2px 8px rgba(0,0,0,0.08)';
-                      e.currentTarget.style.transform = 'translateY(0)';
-                    }}
                   >
-                    <div style={{ padding: '12px', borderBottom: `1px solid ${borderColor}` }}>
-                      <div style={{ fontSize: 'clamp(11px, 2vw, 12px)', color: '#999', marginBottom: '6px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
+                    <div style={{ padding: '12px', borderBottom: `1px solid ${isFinished ? '#d0d0d0' : '#e0e0e0'}` }}>
+                      <div style={{ fontSize: '12px', color: '#999', marginBottom: '6px', display: 'flex', justifyContent: 'space-between' }}>
                         <span>📅 {formatGameTime(f.utc_date)}</span>
-                        <span style={{ background: isFinished ? '#999' : '#2a5298', color: 'white', padding: '2px 8px', borderRadius: '4px', fontSize: 'clamp(10px, 2vw, 11px)' }}>
+                        <span style={{ background: isFinished ? '#999' : '#2a5298', color: 'white', padding: '2px 8px', borderRadius: '4px', fontSize: '11px' }}>
                           {isFinished ? '✓ FINISHED' : '⚪ UPCOMING'}
                         </span>
                       </div>
                       
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr', gap: '8px', alignItems: 'center' }}>
                         <div 
-                          onClick={() => isCurrentWeek && togglePick(f.id, f.home_team_name)}
+                          onClick={() => isCurrentWeek && !isFinished && togglePick(f.id, f.home_team_name)}
                           style={{
                             padding: '10px',
                             borderRadius: '8px',
                             background: currentPicks[f.id] === f.home_team_name ? '#d4edda' : isFinished ? '#f0f0f0' : '#f8f9fa',
-                            border: currentPicks[f.id] === f.home_team_name ? '2px solid #28a745' : `2px solid ${isFinished ? '#ddd' : '#ddd'}`,
+                            border: currentPicks[f.id] === f.home_team_name ? '2px solid #28a745' : '2px solid #ddd',
                             cursor: isCurrentWeek && !isFinished ? 'pointer' : 'default',
                             textAlign: 'center',
-                            fontSize: 'clamp(12px, 2vw, 14px)',
+                            fontSize: '14px',
                             fontWeight: 'bold',
                             color: currentPicks[f.id] === f.home_team_name ? '#28a745' : '#1e3c72',
-                            transition: 'all 0.2s',
                             opacity: isFinished ? 0.7 : 1
-                          }}
-                          onMouseEnter={e => {
-                            if (isCurrentWeek && !isFinished) {
-                              e.currentTarget.style.background = '#e8f5e9';
-                            }
-                          }}
-                          onMouseLeave={e => {
-                            if (isCurrentWeek && !isFinished) {
-                              e.currentTarget.style.background = currentPicks[f.id] === f.home_team_name ? '#d4edda' : '#f8f9fa';
-                            }
                           }}
                         >
                           {f.home_team_name}
                         </div>
                         
-                        <div style={{ textAlign: 'center', fontSize: 'clamp(10px, 2vw, 12px)', color: '#999', minWidth: '40px' }}>
+                        <div style={{ textAlign: 'center', fontSize: '12px', color: '#999', minWidth: '40px' }}>
                           {isFinished ? `${f.home_score}-${f.away_score}` : 'vs'}
                         </div>
                         
                         <div 
-                          onClick={() => isCurrentWeek && togglePick(f.id, f.away_team_name)}
+                          onClick={() => isCurrentWeek && !isFinished && togglePick(f.id, f.away_team_name)}
                           style={{
                             padding: '10px',
                             borderRadius: '8px',
                             background: currentPicks[f.id] === f.away_team_name ? '#d4edda' : isFinished ? '#f0f0f0' : '#f8f9fa',
-                            border: currentPicks[f.id] === f.away_team_name ? '2px solid #28a745' : `2px solid ${isFinished ? '#ddd' : '#ddd'}`,
+                            border: currentPicks[f.id] === f.away_team_name ? '2px solid #28a745' : '2px solid #ddd',
                             cursor: isCurrentWeek && !isFinished ? 'pointer' : 'default',
                             textAlign: 'center',
-                            fontSize: 'clamp(12px, 2vw, 14px)',
+                            fontSize: '14px',
                             fontWeight: 'bold',
                             color: currentPicks[f.id] === f.away_team_name ? '#28a745' : '#1e3c72',
-                            transition: 'all 0.2s',
                             opacity: isFinished ? 0.7 : 1
-                          }}
-                          onMouseEnter={e => {
-                            if (isCurrentWeek && !isFinished) {
-                              e.currentTarget.style.background = '#e8f5e9';
-                            }
-                          }}
-                          onMouseLeave={e => {
-                            if (isCurrentWeek && !isFinished) {
-                              e.currentTarget.style.background = currentPicks[f.id] === f.away_team_name ? '#d4edda' : '#f8f9fa';
-                            }
                           }}
                         >
                           {f.away_team_name}
@@ -677,9 +512,10 @@ export default function App() {
           )}
         </div>
 
-        <div style={{ gridColumn: 'auto' }}>
+        {/* Leaderboard */}
+        <div>
           <div style={{ background: 'white', borderRadius: '12px', boxShadow: '0 2px 8px rgba(0,0,0,0.08)', overflow: 'hidden', position: 'sticky', top: '20px' }}>
-            <div style={{ background: '#1e3c72', color: 'white', padding: '16px', fontSize: 'clamp(16px, 4vw, 18px)', fontWeight: 'bold' }}>
+            <div style={{ background: '#1e3c72', color: 'white', padding: '16px', fontSize: '18px', fontWeight: 'bold' }}>
               🏆 Leaderboard
             </div>
             <div style={{ padding: '12px', maxHeight: '600px', overflowY: 'auto' }}>
@@ -698,7 +534,7 @@ export default function App() {
                         borderRadius: '8px',
                         background: team.team_id === user?.id ? '#e7f3ff' : '#f8f9fa',
                         border: team.team_id === user?.id ? '2px solid #2a5298' : '1px solid #e0e0e0',
-                        fontSize: 'clamp(12px, 3vw, 14px)',
+                        fontSize: '14px',
                         alignItems: 'center'
                       }}
                     >
