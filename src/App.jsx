@@ -138,19 +138,46 @@ export default function App() {
 
   const loadLeaderboard = async () => {
     try {
-      const { data: standings } = await supabase
+      // Fetch standings
+      const { data: standings, error: standingsError } = await supabase
         .from('team_standings')
-        .select('team_id, points, teams(name)')
+        .select('*')
         .order('points', { ascending: false });
 
-      if (standings) {
-        const leaderboardData = standings.map(s => ({
-          team_id: s.team_id,
-          name: s.teams?.name || 'Unknown',
-          points: s.points || 0
-        }));
-        setLeaderboard(leaderboardData);
+      if (standingsError) {
+        console.error('Standings error:', standingsError);
+        return;
       }
+
+      if (!standings || standings.length === 0) {
+        setLeaderboard([]);
+        return;
+      }
+
+      // Fetch all teams
+      const { data: teams, error: teamsError } = await supabase
+        .from('teams')
+        .select('id, name');
+
+      if (teamsError) {
+        console.error('Teams error:', teamsError);
+        return;
+      }
+
+      // Create team map
+      const teamMap = {};
+      (teams || []).forEach(t => {
+        teamMap[t.id] = t.name;
+      });
+
+      // Merge standings with team names
+      const leaderboardData = standings.map(s => ({
+        team_id: s.team_id,
+        name: teamMap[s.team_id] || 'Unknown',
+        points: s.points || 0
+      }));
+
+      setLeaderboard(leaderboardData);
     } catch (e) {
       console.error('Leaderboard error:', e);
     }
@@ -180,16 +207,15 @@ export default function App() {
         return;
       }
 
-      // Check if team exists
-      const { data: existingTeam, error: teamCheckError } = await supabase
+      // Check if team exists (don't use .single() - it errors if 0 rows)
+      const { data: existingTeams } = await supabase
         .from('teams')
         .select('id')
-        .eq('name', teamName)
-        .single();
+        .eq('name', teamName);
 
-      if (existingTeam) {
+      if (existingTeams && existingTeams.length > 0) {
         // Team exists, log in
-        setUser({ id: existingTeam.id, name: teamName });
+        setUser({ id: existingTeams[0].id, name: teamName });
       } else {
         // Team doesn't exist, auto-create it
         const { data: newTeam, error: createError } = await supabase
@@ -199,13 +225,17 @@ export default function App() {
           .single();
 
         if (createError || !newTeam) {
-          throw new Error('Failed to create team');
+          throw new Error('Failed to create team: ' + (createError?.message || 'Unknown error'));
         }
 
         // Create standings entry
-        await supabase
+        const { error: standingsError } = await supabase
           .from('team_standings')
           .insert([{ team_id: newTeam.id, points: 0 }]);
+
+        if (standingsError) {
+          throw new Error('Failed to create standings: ' + standingsError.message);
+        }
 
         setUser({ id: newTeam.id, name: teamName });
       }
