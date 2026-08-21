@@ -158,36 +158,45 @@ export default function App() {
       const cacheAge = cacheTimestamp ? now - parseInt(cacheTimestamp) : null;
       const ONE_DAY = 24 * 60 * 60 * 1000; // 24 hours in ms
       
+      let usedCache = false;
+      let data = null;
+
+      // Check if cache is valid and if we should use it
       if (cachedData && cacheAge && cacheAge < ONE_DAY) {
-        // Use cached data
-        const data = JSON.parse(cachedData);
-        setAllFixtures(data.fixtures);
-        setCurrentWeek(data.currentMatchday);
-        setSelectedWeek(data.currentMatchday);
+        const cached = JSON.parse(cachedData);
         
-        if (user) {
-          const { data: picks } = await supabase.from('picks').select('*').eq('team_id', user.id).eq('matchday', data.currentMatchday);
-          if (picks) {
-            const picksMap = {};
-            picks.forEach(p => {
-              picksMap[p.fixture_id] = p.picked_team;
-            });
-            setCurrentPicks(picksMap);
-          }
+        // Check if there are any LIVE or FINISHED games in the cache
+        const hasLiveOrFinished = cached.fixtures.some(f => 
+          f.status === 'LIVE' || f.status === 'FINISHED'
+        );
+        
+        if (!hasLiveOrFinished) {
+          // No active games, safe to use cache
+          data = cached;
+          usedCache = true;
+          console.log('Using cached fixtures (no live/finished games)');
+        } else {
+          // There are active games, fetch fresh
+          console.log('Cache has active games, fetching fresh data');
         }
-        setFixturesLoading(false);
-        return;
       }
-      
-      // Fetch fresh data from API
-      const res = await fetch('/api/fetch-epl-data');
-      const data = await res.json();
-      
-      if (data.fixtures && data.fixtures.length > 0) {
-        // Cache the data
-        localStorage.setItem('epl_fixtures_cache', JSON.stringify(data));
-        localStorage.setItem('epl_fixtures_cache_time', now.toString());
+
+      // If we didn't use cache, fetch fresh from API
+      if (!usedCache) {
+        const res = await fetch('/api/fetch-epl-data');
+        const freshData = await res.json();
         
+        if (freshData.fixtures && freshData.fixtures.length > 0) {
+          // Cache the fresh data
+          localStorage.setItem('epl_fixtures_cache', JSON.stringify(freshData));
+          localStorage.setItem('epl_fixtures_cache_time', now.toString());
+          data = freshData;
+          console.log(`Fetched fresh data (${freshData.updatedCount} fixtures updated)`);
+        }
+      }
+
+      // Use the data (either from cache or fresh fetch)
+      if (data && data.fixtures && data.fixtures.length > 0) {
         setAllFixtures(data.fixtures);
         setCurrentWeek(data.currentMatchday);
         setSelectedWeek(data.currentMatchday);
@@ -219,22 +228,35 @@ export default function App() {
 
   const loadLeaderboard = async () => {
     try {
-      // Get standings with points
-      const { data: standings } = await supabase
-        .from('team_standings')
-        .select('*')
-        .order('points', { ascending: false });
+      // Get all teams first
+      const { data: allTeams } = await supabase.from('teams').select('*');
       
-      // Get games picked count for each team
-      if (standings) {
-        const enriched = await Promise.all(standings.map(async (team) => {
+      if (allTeams && allTeams.length > 0) {
+        // Get standings and games picked for each team
+        const enriched = await Promise.all(allTeams.map(async (team) => {
+          // Get points from standings
+          const { data: standing } = await supabase
+            .from('team_standings')
+            .select('points')
+            .eq('team_id', team.id)
+            .single();
+          
+          // Get total picks count
           const { count } = await supabase
             .from('picks')
             .select('*', { count: 'exact', head: true })
-            .eq('team_id', team.team_id);
-          return { ...team, games_picked: count || 0 };
+            .eq('team_id', team.id);
+          
+          return {
+            team_id: team.id,
+            team_name: team.name,
+            points: standing?.points || 0,
+            games_picked: count || 0
+          };
         }));
         
+        // Sort by points (highest first)
+        enriched.sort((a, b) => b.points - a.points);
         setLeaderboard(enriched);
       }
     } catch (e) {
