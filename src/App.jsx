@@ -98,7 +98,11 @@ export default function App() {
 
     const loadUserPicks = async () => {
       try {
-        console.log('Loading picks for user:', user.id, 'matchday:', currentWeek);
+        console.log('=== LOADING PICKS ===');
+        console.log('User:', user.name);
+        console.log('User ID type:', typeof user.id);
+        console.log('User ID value:', user.id);
+        console.log('Current matchday:', currentWeek);
         
         const { data: picks, error: picksError } = await supabase
           .from('picks')
@@ -111,16 +115,20 @@ export default function App() {
           return;
         }
 
-        console.log('Picks loaded:', picks?.length || 0);
+        console.log('Picks returned:', picks?.length || 0);
+        if (picks) {
+          console.log('Picks data:', JSON.stringify(picks, null, 2));
+        }
         
         if (picks && picks.length > 0) {
           const picksMap = {};
           picks.forEach(p => {
             picksMap[p.fixture_id] = p.picked_team;
           });
-          console.log('Setting currentPicks:', picksMap);
+          console.log('✓ Setting picks:', picksMap);
           setCurrentPicks(picksMap);
         } else {
+          console.log('No picks found, clearing...');
           setCurrentPicks({});
         }
       } catch (e) {
@@ -238,7 +246,7 @@ export default function App() {
       console.log('Step 2: Checking if team exists...');
       const { data: existingTeams, error: teamCheckError } = await supabase
         .from('teams')
-        .select('id')
+        .select('*')
         .eq('name', teamName);
 
       if (teamCheckError) {
@@ -247,9 +255,12 @@ export default function App() {
       }
 
       console.log('Existing teams found:', existingTeams?.length || 0);
+      console.log('Raw Supabase response:', JSON.stringify(existingTeams, null, 2));
 
       if (existingTeams && existingTeams.length > 0) {
         console.log('✓ Team exists, logging in');
+        console.log('Team data:', existingTeams[0]);
+        console.log('Team ID being set:', existingTeams[0].id);
         setUser({ id: existingTeams[0].id, name: teamName });
         setLoading(false);
         return;
