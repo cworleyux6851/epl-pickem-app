@@ -12,7 +12,7 @@ export default async function handler(req, res) {
       return res.status(500).json({ error: 'FOOTBALL_DATA_API_KEY not set' });
     }
 
-    // Fetch from football-data.org
+    // Fetch ALL EPL matches (not just current week)
     const response = await fetch(
       'https://api.football-data.org/v4/competitions/PL/matches?status=SCHEDULED,LIVE,FINISHED',
       { headers: { 'X-Auth-Token': API_KEY } }
@@ -26,31 +26,40 @@ export default async function handler(req, res) {
     const matches = data.matches || [];
     const currentMatchday = data.season?.currentMatchday || 1;
 
+    console.log(`Fetched ${matches.length} matches, current matchday: ${currentMatchday}`);
+
     // Save each fixture to Supabase
     for (const match of matches) {
-      await supabase.from('fixtures').upsert({
-        id: match.id,
-        home_team_name: match.homeTeam.name,
-        away_team_name: match.awayTeam.name,
-        home_team_id: match.homeTeam.id,
-        away_team_id: match.awayTeam.id,
-        utc_date: match.utcDate,
-        status: match.status,
-        home_score: match.score.fullTime.home,
-        away_score: match.score.fullTime.away,
-        matchday: match.season?.currentMatchday || match.utcDate ? 1 : 0
-      }, { onConflict: 'id' });
+      // Each match has its own matchday property from the API
+      const matchday = match.matchday || 0;
+      
+      await supabase.from('fixtures').upsert(
+        {
+          id: match.id,
+          home_team_name: match.homeTeam.name,
+          away_team_name: match.awayTeam.name,
+          home_team_id: match.homeTeam.id,
+          away_team_id: match.awayTeam.id,
+          utc_date: match.utcDate,
+          status: match.status,
+          home_score: match.score.fullTime.home,
+          away_score: match.score.fullTime.away,
+          matchday: matchday
+        },
+        { onConflict: 'id' }
+      );
     }
 
     // Return formatted fixtures for the app
     const fixtures = matches.map(m => ({
       id: m.id,
-      homeTeam: { name: m.homeTeam.name },
-      awayTeam: { name: m.awayTeam.name },
-      utcDate: m.utcDate,
+      home_team_name: m.homeTeam.name,
+      away_team_name: m.awayTeam.name,
+      utc_date: m.utcDate,
       status: m.status,
-      score: { fullTime: { home: m.score.fullTime.home, away: m.score.fullTime.away } },
-      season: { currentMatchday: m.season?.currentMatchday || currentMatchday }
+      home_score: m.score.fullTime.home,
+      away_score: m.score.fullTime.away,
+      matchday: m.matchday || currentMatchday
     }));
 
     res.json({ 
