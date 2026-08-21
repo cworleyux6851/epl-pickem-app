@@ -60,11 +60,18 @@ export default function App() {
             picked_team: team
           }));
 
+        console.log('Saving picks:', JSON.stringify(picks, null, 2));
+
         await supabase.from('picks').delete().eq('team_id', user.id).eq('matchday', currentWeek);
         if (picks.length > 0) {
-          await supabase.from('picks').insert(picks);
+          const { error: insertError } = await supabase.from('picks').insert(picks);
+          if (insertError) {
+            console.error('Insert error:', insertError);
+            return;
+          }
         }
         
+        console.log('✓ Picks saved successfully');
         setSaveStatus('✓ Saved');
         setTimeout(() => setSaveStatus(''), 3000);
         await loadLeaderboard();
