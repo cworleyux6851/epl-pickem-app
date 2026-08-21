@@ -82,31 +82,49 @@ export default function App() {
     loadFixtures();
   }, []);
 
-  // Load user's picks when logged in
+  // Load user's picks when user logs in AND currentWeek is available
   useEffect(() => {
-    if (!user || !currentWeek) return;
+    if (!user) {
+      setCurrentPicks({});
+      return;
+    }
 
     const loadUserPicks = async () => {
       try {
-        const { data: picks } = await supabase
+        console.log('Loading picks for user:', user.id, 'matchday:', currentWeek);
+        
+        const { data: picks, error: picksError } = await supabase
           .from('picks')
           .select('*')
           .eq('team_id', user.id)
           .eq('matchday', currentWeek);
+        
+        if (picksError) {
+          console.error('Error loading picks:', picksError);
+          return;
+        }
+
+        console.log('Picks loaded:', picks?.length || 0);
         
         if (picks && picks.length > 0) {
           const picksMap = {};
           picks.forEach(p => {
             picksMap[p.fixture_id] = p.picked_team;
           });
+          console.log('Setting currentPicks:', picksMap);
           setCurrentPicks(picksMap);
+        } else {
+          setCurrentPicks({});
         }
       } catch (e) {
         console.error('Error loading user picks:', e);
       }
     };
 
-    loadUserPicks();
+    // Only load picks if we have a currentWeek
+    if (currentWeek) {
+      loadUserPicks();
+    }
   }, [user, currentWeek]);
 
   // Load leaderboard
@@ -124,10 +142,13 @@ export default function App() {
       const res = await fetch('/api/fetch-epl-data');
       const data = await res.json();
       
+      console.log('Fixtures loaded, currentMatchday:', data.currentMatchday);
+      
       if (data.fixtures && data.fixtures.length > 0) {
         setAllFixtures(data.fixtures);
         setCurrentWeek(data.currentMatchday);
         setSelectedWeek(data.currentMatchday);
+        console.log('✓ Week set to:', data.currentMatchday);
       }
       setFixturesLoading(false);
     } catch (e) {
