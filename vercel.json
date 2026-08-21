@@ -1,7 +1,6 @@
 {
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
-  "framework": "react",
   "functions": {
     "api/fetch-epl-data.js": {
       "runtime": "nodejs18.x",
